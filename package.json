@@ -1,0 +1,43 @@
+{
+  "name": "skillduler",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "YAML-declared AI cron scheduler. Define jobs, run LLM prompts on a schedule, deliver results to Telegram.",
+  "bin": {
+    "skillduler": "dist/index.js"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "run:job": "tsx src/index.ts",
+    "lint": "biome check src/",
+    "lint:fix": "biome check --write src/",
+    "typecheck": "tsc --noEmit",
+    "prepare": "lefthook install"
+  },
+  "keywords": [
+    "ai",
+    "cron",
+    "scheduler",
+    "llm",
+    "claude",
+    "telegram",
+    "yaml"
+  ],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@10.30.2",
+  "dependencies": {
+    "node-cron": "^4.2.1",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.8",
+    "@types/node": "^25.5.0",
+    "@types/node-cron": "^3.0.11",
+    "lefthook": "^2.1.4",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}
