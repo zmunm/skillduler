@@ -1,6 +1,16 @@
 # skillduler
 
-YAML-declared AI cron scheduler. Define jobs, run LLM prompts or shell commands on a schedule, deliver results to Telegram. Works with any LLM CLI.
+YAML-declared AI cron scheduler. Define jobs, run LLM prompts or shell commands on a schedule, deliver results to Telegram.
+
+## Why skillduler?
+
+Most AI schedulers are tied to a specific LLM, require MCP servers, or come as heavy desktop apps. skillduler is different:
+
+- **LLM-agnostic** — `prompt_template` takes any CLI: `claude -p`, `ollama run`, `codex`, a custom wrapper — swap one line and switch providers
+- **Single-file config** — one `jobs.yaml` declares everything: schedule, prompts, commands, notification targets. No database, no UI, no framework
+- **Zero lock-in** — plain Node.js + cron. No MCP protocol, no plugin system, no proprietary runtime. You own the 200 lines of code
+- **Mix AI and shell** — prompt-mode jobs call your LLM; command-mode jobs run any shell command. Same scheduler, same notification pipeline
+- **Self-hosted** — runs on your machine, your server, your CI. Prompts and data never leave your environment
 
 ## Quick Start
 
