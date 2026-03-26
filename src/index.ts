@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { exec } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, watch } from 'node:fs'
 import path from 'node:path'
 import cron from 'node-cron'
 import { parse as parseYaml } from 'yaml'
@@ -147,7 +147,14 @@ function runJob(config: Config, job: Job): Promise<void> {
 
       exec(
         command,
-        { cwd: ROOT_DIR, timeout: 300000 },
+        {
+          cwd: ROOT_DIR,
+          timeout: 300000,
+          env: {
+            ...process.env,
+            PATH: `${process.env.HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH ?? ''}`,
+          },
+        },
         async (error, stdout, stderr) => {
           const result = stdout.trim()
 
@@ -179,12 +186,21 @@ function runJob(config: Config, job: Job): Promise<void> {
   })
 }
 
-function main(): void {
+// 등록된 크론 태스크 추적 (재로드 시 정리용)
+const scheduledTasks: ReturnType<typeof cron.schedule>[] = []
+
+function scheduleAll(): void {
+  // 기존 크론 정리
+  for (const task of scheduledTasks) {
+    task.stop()
+  }
+  scheduledTasks.length = 0
+
   const { config, jobs } = loadConfig()
 
   if (jobs.length === 0) {
     console.log('No enabled jobs found.')
-    process.exit(0)
+    return
   }
 
   const timezone = config.timezone || 'UTC'
@@ -197,12 +213,36 @@ function main(): void {
       continue
     }
 
-    cron.schedule(job.cron, () => runJob(config, job), { timezone })
+    const task = cron.schedule(job.cron, () => runJob(config, job), {
+      timezone,
+    })
+    scheduledTasks.push(task)
     console.log(`  \u2713 ${job.name}: ${job.cron} \u2014 ${job.description}`)
   }
+}
+
+function main(): void {
+  scheduleAll()
+
+  // jobs.yaml 변경 감시 — 핫 리로드
+  let reloadTimer: ReturnType<typeof setTimeout> | null = null
+  watch(JOBS_FILE, () => {
+    // 디바운스: 500ms 내 중복 이벤트 무시
+    if (reloadTimer) clearTimeout(reloadTimer)
+    reloadTimer = setTimeout(() => {
+      console.log('\n[hot-reload] jobs.yaml changed, reloading...')
+      try {
+        scheduleAll()
+        console.log('[hot-reload] done\n')
+      } catch (e) {
+        console.error(`[hot-reload] failed: ${(e as Error).message}`)
+      }
+    }, 500)
+  })
 
   const runNow = process.argv[2]
   if (runNow) {
+    const { config, jobs } = loadConfig()
     const job = jobs.find((j) => j.name === runNow)
     if (job) {
       console.log(`\nRunning "${runNow}" immediately...`)
