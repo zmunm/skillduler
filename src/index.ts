@@ -36,9 +36,23 @@ const JOBS_FILE = path.join(ROOT_DIR, 'jobs.yaml')
 function loadConfig(): { config: Config; jobs: Job[] } {
   const raw = readFileSync(JOBS_FILE, 'utf-8')
   const parsed = parseYaml(raw) as JobsConfig
+
+  const validJobs: Job[] = []
+  for (const [i, job] of (parsed.jobs ?? []).entries()) {
+    if (!job.name || !job.cron) {
+      console.error(
+        `[loadConfig] jobs[${i}]: missing required field (name=${job.name ?? 'undefined'}, cron=${job.cron ?? 'undefined'}) — skipped`,
+      )
+      continue
+    }
+    if (job.enabled) {
+      validJobs.push(job)
+    }
+  }
+
   return {
     config: parsed.config || {},
-    jobs: parsed.jobs.filter((j) => j.enabled),
+    jobs: validJobs,
   }
 }
 
@@ -98,17 +112,21 @@ function notifyTelegram(
   const message = `\u{1F4CB} ${job.name}\n\n${result}`
   return (async () => {
     try {
-      if (message.length <= TELEGRAM_MAX_LENGTH) {
-        await sendTelegram(message, botToken, chatId)
-      } else {
-        await sendTelegram(
-          message.slice(0, TELEGRAM_MAX_LENGTH),
-          botToken,
-          chatId,
-        )
-        await sendTelegram(message.slice(TELEGRAM_MAX_LENGTH), botToken, chatId)
+      const chunks: string[] = []
+      for (let i = 0; i < message.length; i += TELEGRAM_MAX_LENGTH) {
+        chunks.push(message.slice(i, i + TELEGRAM_MAX_LENGTH))
       }
-      console.log(`[${job.name}] telegram notification sent`)
+      for (const chunk of chunks) {
+        const ok = await sendTelegram(chunk, botToken, chatId)
+        if (!ok) {
+          console.error(
+            `[${job.name}] telegram: chunk send failed (${chunk.length} chars)`,
+          )
+        }
+      }
+      console.log(
+        `[${job.name}] telegram notification sent (${chunks.length} chunk(s))`,
+      )
     } catch (e) {
       const err = e as Error
       console.error(
@@ -158,19 +176,19 @@ function runJob(config: Config, job: Job): Promise<void> {
         async (error, stdout, stderr) => {
           const result = stdout.trim()
 
-          if (!error && result) {
+          if (error) {
+            const errMsg = `exit code ${error.code}: ${stderr.slice(0, 500)}`
+            console.error(`[${job.name}] failed: ${errMsg}`)
+            if (job.notify === 'telegram') {
+              await notifyTelegram(config, job, `Job failed: ${errMsg}`)
+            }
+          } else if (result) {
             console.log(`[${job.name}] done (${result.length} chars)`)
             if (job.notify === 'telegram') {
               await notifyTelegram(config, job, result)
             }
           } else {
-            const errMsg = error
-              ? `exit code ${error.code}: ${stderr.slice(0, 200)}`
-              : 'no output'
-            console.error(`[${job.name}] failed: ${errMsg}`)
-            if (job.notify === 'telegram') {
-              await notifyTelegram(config, job, `Job failed: ${errMsg}`)
-            }
+            console.log(`[${job.name}] done (no output, skipping notification)`)
           }
           resolve()
         },
@@ -232,8 +250,15 @@ function main(): void {
     reloadTimer = setTimeout(() => {
       console.log('\n[hot-reload] jobs.yaml changed, reloading...')
       try {
+        const { config, jobs } = loadConfig()
         scheduleAll()
-        console.log('[hot-reload] done\n')
+        const msg = `[hot-reload] jobs.yaml 리로드 완료: ${jobs.length}개 잡 로드됨`
+        console.log(msg + '\n')
+        const botToken = config.telegram_bot_token || ''
+        const chatId = config.telegram_chat_id || ''
+        if (botToken && chatId) {
+          sendTelegram(msg, botToken, chatId).catch(() => {})
+        }
       } catch (e) {
         console.error(`[hot-reload] failed: ${(e as Error).message}`)
       }
