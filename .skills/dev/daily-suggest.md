@@ -100,7 +100,7 @@ tossctl account summary --output json 2>/dev/null
 
 ## Phase 3: 작업 제안을 승인 버튼으로 전송
 
-[작업] 섹션의 각 항목 중 council에서 자동 처리 가능한 것은 webhook /suggest API로 전송.
+[작업] 섹션의 각 항목 중 gaild에서 자동 처리 가능한 것은 webhook /suggest API로 전송.
 이렇게 하면 사용자가 텔레그램에서 [승인] [패스] 버튼으로 바로 결정 가능.
 
 작업 항목을 수집한 후 아래 명령 실행:
@@ -120,9 +120,9 @@ command: 승인 시 실행할 셸 명령 (최대 1000자). **선택.**
 command 예시:
 - 단순 작업: "git -C ~/project/ghostship-bridge push"
 - brew: "brew upgrade 패키지명"
-- 리뷰 필요한 작업: command 생략 (승인 시 자동으로 active → crew/council 루프 진입)
+- 리뷰 필요한 작업: command 생략 (승인 시 자동으로 active → crew/gaild 루프 진입)
 
-command가 있으면 승인 즉시 실행 → done. command가 없으면 승인 시 active로 전환되어 crew/council 리뷰 루프에 진입.
+command가 있으면 승인 즉시 실행 → done. command가 없으면 승인 시 active로 전환되어 crew/gaild 리뷰 루프에 진입.
 
 자동화 불가능한 항목 (투자 결정, 물리적 행동 등)은 /suggest로 안 보내고 stdout에만 출력.
 
