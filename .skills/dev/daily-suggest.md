@@ -115,11 +115,14 @@ curl -s -X POST http://localhost:3100/suggest -H 'Content-Type: application/json
 
 type 값: code (코드 수정), infra (인프라), docs (문서), analysis (분석)
 project: 해당 프로젝트 경로. 모르면 생략.
-command: 승인 시 실행할 셸 명령 (최대 1000자). 생략하면 council-cli task create로 폴백.
+command: 승인 시 실행할 셸 명령 (최대 1000자). **선택.**
 
-command 사용 기준:
-- command 넣을 것: git push, brew upgrade, 파일 정리 등 단순 셸 명령으로 끝나는 작업
-- command 생략 (council 폴백): 코드 수정, 리팩토링, 버그 수정 등 리뷰가 필요한 작업
+command 예시:
+- 단순 작업: "git -C ~/project/ghostship-bridge push"
+- brew: "brew upgrade 패키지명"
+- 리뷰 필요한 작업: command 생략 (승인 시 자동으로 active → crew/council 루프 진입)
+
+command가 있으면 승인 즉시 실행 → done. command가 없으면 승인 시 active로 전환되어 crew/council 리뷰 루프에 진입.
 
 자동화 불가능한 항목 (투자 결정, 물리적 행동 등)은 /suggest로 안 보내고 stdout에만 출력.
 
