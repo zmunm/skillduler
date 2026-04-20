@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { exec } from 'node:child_process'
+import { type ChildProcess, exec } from 'node:child_process'
 import { existsSync, readFileSync, watch } from 'node:fs'
 import path from 'node:path'
 import cron from 'node-cron'
@@ -15,6 +15,7 @@ interface Job {
   notify?: string
   telegram_bot_token?: string
   telegram_chat_id?: string
+  timeout_ms?: number
   enabled: boolean
 }
 
@@ -23,7 +24,10 @@ interface Config {
   timezone?: string
   telegram_bot_token?: string
   telegram_chat_id?: string
+  default_timeout_ms?: number
 }
+
+const FALLBACK_TIMEOUT_MS = 600_000
 
 interface JobsConfig {
   config?: Config
@@ -155,29 +159,55 @@ function buildCommand(config: Config, job: Job): string {
   throw new Error(`Job "${job.name}" must have either "command" or "prompt"`)
 }
 
+interface RunningJob {
+  child: ChildProcess
+  promise: Promise<void>
+  startedAt: Date
+}
+
+// 실행 중인 잡 추적 — 핫리로드 시 기다리기 위함
+const runningJobs = new Map<string, RunningJob>()
+
 function runJob(config: Config, job: Job): Promise<void> {
-  return new Promise((resolve) => {
+  const existing = runningJobs.get(job.name)
+  if (existing) {
+    console.warn(
+      `[${job.name}] already running since ${existing.startedAt.toISOString()}, skipping duplicate execution`,
+    )
+    return existing.promise
+  }
+
+  let childRef: ChildProcess | null = null
+
+  const promise = new Promise<void>((resolve) => {
     const startTime = new Date().toISOString()
     console.log(`[${startTime}] running: ${job.name}`)
 
     try {
       const command = buildCommand(config, job)
+      const timeoutMs =
+        job.timeout_ms ?? config.default_timeout_ms ?? FALLBACK_TIMEOUT_MS
 
-      exec(
+      childRef = exec(
         command,
         {
           cwd: ROOT_DIR,
-          timeout: 300000,
+          timeout: timeoutMs,
           env: {
             ...process.env,
             PATH: `${process.env.HOME}/.local/bin:/usr/local/bin:/usr/bin:/bin:${process.env.PATH ?? ''}`,
           },
         },
         async (error, stdout, stderr) => {
+          runningJobs.delete(job.name)
           const result = stdout.trim()
 
           if (error) {
-            const errMsg = `exit code ${error.code}: ${stderr.slice(0, 500)}`
+            const killed = error.signal === 'SIGTERM' && error.code === null
+            const reason = killed
+              ? `timeout after ${Math.round(timeoutMs / 1000)}s (SIGTERM)`
+              : `exit code ${error.code}`
+            const errMsg = `${reason}: ${stderr.slice(0, 500)}`
             console.error(`[${job.name}] failed: ${errMsg}`)
             if (job.notify === 'telegram') {
               await notifyTelegram(config, job, `Job failed: ${errMsg}`)
@@ -202,23 +232,34 @@ function runJob(config: Config, job: Job): Promise<void> {
       resolve()
     }
   })
+
+  if (childRef) {
+    runningJobs.set(job.name, {
+      child: childRef,
+      promise,
+      startedAt: new Date(),
+    })
+  }
+
+  return promise
 }
 
 // 등록된 크론 태스크 추적 (재로드 시 정리용)
 const scheduledTasks: ReturnType<typeof cron.schedule>[] = []
 
-function scheduleAll(): void {
+function scheduleAll(): { config: Config; jobs: Job[] } {
   // 기존 크론 정리
   for (const task of scheduledTasks) {
     task.stop()
   }
   scheduledTasks.length = 0
 
-  const { config, jobs } = loadConfig()
+  const loaded = loadConfig()
+  const { config, jobs } = loaded
 
   if (jobs.length === 0) {
     console.log('No enabled jobs found.')
-    return
+    return loaded
   }
 
   const timezone = config.timezone || 'UTC'
@@ -233,41 +274,62 @@ function scheduleAll(): void {
 
     const task = cron.schedule(job.cron, () => runJob(config, job), {
       timezone,
+      noOverlap: true,
     })
     scheduledTasks.push(task)
     console.log(`  \u2713 ${job.name}: ${job.cron} \u2014 ${job.description}`)
   }
+
+  return loaded
 }
 
 function main(): void {
-  scheduleAll()
+  const initial = scheduleAll()
 
   // jobs.yaml 변경 감시 — 핫 리로드
+  // 실행 중인 잡이 있으면 완료 대기 후 리로드 (SIGTERM으로 죽이지 않음)
   let reloadTimer: ReturnType<typeof setTimeout> | null = null
+  // 진행 중 리로드와 펜딩 리로드를 promise chain으로 직렬화
+  let reloadChain: Promise<void> = Promise.resolve()
+
+  const performReload = async (): Promise<void> => {
+    if (runningJobs.size > 0) {
+      const names = Array.from(runningJobs.keys())
+      console.log(
+        `\n[hot-reload] waiting for ${runningJobs.size} running job(s) to finish before reload: ${names.join(', ')}`,
+      )
+      await Promise.all(Array.from(runningJobs.values()).map((r) => r.promise))
+    }
+    console.log('[hot-reload] jobs.yaml changed, reloading...')
+    const { config, jobs } = scheduleAll()
+    const msg = `[hot-reload] jobs.yaml 리로드 완료: ${jobs.length}개 잡 로드됨`
+    console.log(`${msg}\n`)
+    const botToken = config.telegram_bot_token || ''
+    const chatId = config.telegram_chat_id || ''
+    if (botToken && chatId) {
+      sendTelegram(msg, botToken, chatId).catch((e) => {
+        console.error(
+          `[hot-reload] telegram notification failed: ${(e as Error).message}`,
+        )
+      })
+    }
+  }
+
   watch(JOBS_FILE, () => {
     // 디바운스: 500ms 내 중복 이벤트 무시
     if (reloadTimer) clearTimeout(reloadTimer)
     reloadTimer = setTimeout(() => {
-      console.log('\n[hot-reload] jobs.yaml changed, reloading...')
-      try {
-        const { config, jobs } = loadConfig()
-        scheduleAll()
-        const msg = `[hot-reload] jobs.yaml 리로드 완료: ${jobs.length}개 잡 로드됨`
-        console.log(msg + '\n')
-        const botToken = config.telegram_bot_token || ''
-        const chatId = config.telegram_chat_id || ''
-        if (botToken && chatId) {
-          sendTelegram(msg, botToken, chatId).catch(() => {})
-        }
-      } catch (e) {
-        console.error(`[hot-reload] failed: ${(e as Error).message}`)
-      }
+      reloadChain = reloadChain
+        .then(() => performReload())
+        .catch((e) => {
+          console.error(`[hot-reload] failed: ${(e as Error).message}`)
+        })
     }, 500)
   })
 
   const runNow = process.argv[2]
   if (runNow) {
-    const { config, jobs } = loadConfig()
+    const { config, jobs } = initial
     const job = jobs.find((j) => j.name === runNow)
     if (job) {
       console.log(`\nRunning "${runNow}" immediately...`)
